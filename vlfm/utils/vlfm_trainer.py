@@ -163,6 +163,10 @@ class VLFMTrainer(PPOTrainer):
         hab_vis = HabitatVis()
         while len(stats_episodes) < (number_of_eval_episodes * evals_per_ep) and self.envs.num_envs > 0:
             current_episodes_info = self.envs.current_episodes()
+            if "VLFM_HABITAT_TRACE_DIR" in os.environ:
+                from vlfm.utils.habitat_decision_trace import get_trace_logger
+
+                get_trace_logger().set_episode_context(current_episodes_info[0])
 
             with inference_mode():
                 action_data = self._agent.actor_critic.act(
@@ -266,6 +270,10 @@ class VLFMTrainer(PPOTrainer):
                         num_successes += 1
                     num_total += 1
                     print(f"Success rate: {num_successes / num_total * 100:.2f}% ({num_successes} out of {num_total})")
+                    if "VLFM_HABITAT_TRACE_DIR" in os.environ:
+                        from vlfm.utils.habitat_decision_trace import get_trace_logger
+
+                        get_trace_logger().end_episode(current_episodes_info[i], episode_stats, infos[i])
 
                     from vlfm.utils.episode_stats_logger import (
                         log_episode_stats,

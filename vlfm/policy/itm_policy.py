@@ -144,6 +144,8 @@ class BaseITMPolicy(BaseObjectNavPolicy):
 
         best_frontier = sorted_pts[best_frontier_idx]
         best_value = sorted_values[best_frontier_idx]
+        self._vlfm_trace_selected_frontier = np.asarray(best_frontier)
+        self._vlfm_trace_selected_frontier_value = np.asarray(best_value)
         self._acyclic_enforcer.add_state_action(robot_xy, best_frontier, top_two_values)
         self._last_value = best_value
         self._last_frontier = best_frontier
@@ -264,6 +266,8 @@ class ITMPolicyV2(BaseITMPolicy):
         self, observations: "TensorDict", frontiers: np.ndarray
     ) -> Tuple[np.ndarray, List[float]]:
         sorted_frontiers, sorted_values = self._value_map.sort_waypoints(frontiers, 0.5)
+        self._vlfm_trace_sorted_frontiers = np.asarray(sorted_frontiers)
+        self._vlfm_trace_frontier_scores = np.asarray(sorted_values)
         return sorted_frontiers, sorted_values
 
 

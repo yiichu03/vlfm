@@ -118,6 +118,10 @@ class BaseObjectNavPolicy(BasePolicy):
         Once the target object is found, it navigates to the object.
         """
         self._pre_step(observations, masks)
+        self._vlfm_trace_sorted_frontiers = None
+        self._vlfm_trace_frontier_scores = None
+        self._vlfm_trace_selected_frontier = None
+        self._vlfm_trace_selected_frontier_value = None
 
         object_map_rgbd = self._observations_cache["object_map_rgbd"]
         detections = [
@@ -142,6 +146,10 @@ class BaseObjectNavPolicy(BasePolicy):
             action_numpy = action_numpy[0]
         print(f"Step: {self._num_steps} | Mode: {mode} | Action: {action_numpy}")
         self._policy_info.update(self._get_policy_info(detections[0]))
+        if os.environ.get("VLFM_HABITAT_TRACE_DIR"):
+            from vlfm.utils.habitat_decision_trace import get_trace_logger
+
+            get_trace_logger().log_policy_step(self, observations, mode, pointnav_action)
         self._num_steps += 1
 
         self._observations_cache = {}
