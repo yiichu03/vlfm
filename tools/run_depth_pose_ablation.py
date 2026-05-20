@@ -114,6 +114,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--habitat_camera_height", type=float, default=0.88)
     parser.add_argument("--lingbot_min_depth", type=float, default=0.05)
     parser.add_argument("--lingbot_max_depth", type=float, default=5.0)
+    parser.add_argument(
+        "--calibrated_lingbot_depth_scale",
+        type=float,
+        default=2.07,
+        help="Oracle diagnostic scale for LingBot-depth + Habitat-pose replay.",
+    )
     parser.add_argument("--lingbot_pose_camera_height", type=float, default=0.88)
     parser.add_argument("--min_obstacle_height", type=float, default=0.61)
     parser.add_argument("--max_obstacle_height", type=float, default=0.88)
@@ -204,6 +210,31 @@ def prepare_depth(
         fov = local_get_hfov(fx, depth_norm.shape[1])
         return depth_norm, args.lingbot_min_depth, args.lingbot_max_depth, fx, fy, fov, depth_metric, valid
 
+    if spec.depth_source == "lingbot_world_points":
+        if "world_points" not in lingbot or "extrinsic_w2c" not in lingbot:
+            raise KeyError("lingbot_world_points requires world_points and extrinsic_w2c in the LingBot npz")
+        intrinsic = np.asarray(lingbot["intrinsic"], dtype=np.float32)
+        world_points = np.asarray(lingbot["world_points"], dtype=np.float32)
+        if world_points.ndim != 3 or world_points.shape[-1] != 3:
+            raise ValueError(f"Expected world_points shape HxWx3, got {world_points.shape}")
+        w2c = ensure_4x4(lingbot["extrinsic_w2c"], "extrinsic_w2c")
+        h, w = world_points.shape[:2]
+        points_flat = world_points.reshape(-1, 3)
+        ones = np.ones((points_flat.shape[0], 1), dtype=np.float32)
+        points_h = np.concatenate([points_flat, ones], axis=1)
+        points_cam_cv = (w2c @ points_h.T).T[:, :3].reshape(h, w, 3)
+        depth_metric = points_cam_cv[..., 2].astype(np.float32) * np.float32(spec.depth_scale)
+        valid = np.isfinite(depth_metric) & (depth_metric >= args.lingbot_min_depth) & (depth_metric <= args.lingbot_max_depth)
+        depth_norm = np.ones_like(depth_metric, dtype=np.float32)
+        depth_norm[valid] = (depth_metric[valid] - args.lingbot_min_depth) / (
+            args.lingbot_max_depth - args.lingbot_min_depth
+        )
+        depth_norm = np.clip(depth_norm, 0.0, 1.0)
+        fx = float(intrinsic[0, 0])
+        fy = float(intrinsic[1, 1])
+        fov = local_get_hfov(fx, depth_norm.shape[1])
+        return depth_norm, args.lingbot_min_depth, args.lingbot_max_depth, fx, fy, fov, depth_metric, valid
+
     raise ValueError(f"Unsupported depth source: {spec.depth_source}")
 
 
@@ -266,7 +297,22 @@ def save_experiment_contact_sheet(
         panel("Original VLFM Map", render_bev(dict(habitat))),
         panel("Decision", text),
     ]
-    for name in ["lingbot_depth_habitat_pose", "habitat_depth_lingbot_pose", "best_lingbot_scale"]:
+    if "lingbot_world_points_habitat_pose" in experiments:
+        bottom_panel_names = [
+            "lingbot_depth_habitat_pose",
+            "lingbot_depth_habitat_pose_calibrated",
+            "lingbot_world_points_habitat_pose",
+            "lingbot_world_points_habitat_pose_calibrated",
+        ]
+    else:
+        bottom_panel_names = [
+            "lingbot_depth_habitat_pose",
+            "lingbot_depth_habitat_pose_calibrated",
+            "habitat_depth_lingbot_pose",
+            "best_lingbot_scale",
+        ]
+
+    for name in bottom_panel_names:
         data = experiments.get(name)
         panels.append(panel(name, render_bev(dict(data)) if data is not None else None))
     while len(panels) < 8:
@@ -323,6 +369,8 @@ def run_obstacle_experiment(
         }
         if spec.depth_source == "lingbot" and "depth_conf" in lingbot:
             step_data["depth_conf"] = np.asarray(lingbot["depth_conf"], dtype=np.float32)
+        if spec.depth_source == "lingbot_world_points" and "world_points_conf" in lingbot:
+            step_data["world_points_conf"] = np.asarray(lingbot["world_points_conf"], dtype=np.float32)
 
         original_obstacle = habitat.get("obstacle_map")
         original_explored = habitat.get("explored_map")
@@ -727,8 +775,30 @@ def main() -> None:
 
     core_specs = [
         ExperimentSpec("lingbot_depth_habitat_pose", "lingbot", "habitat", 1.0, 1.0, True),
+        ExperimentSpec(
+            "lingbot_depth_habitat_pose_calibrated",
+            "lingbot",
+            "habitat",
+            args.calibrated_lingbot_depth_scale,
+            1.0,
+            True,
+        ),
         ExperimentSpec("habitat_depth_lingbot_pose", "habitat", "lingbot", 1.0, 1.0, True),
     ]
+    if "world_points" in first_lingbot:
+        core_specs.extend(
+            [
+                ExperimentSpec("lingbot_world_points_habitat_pose", "lingbot_world_points", "habitat", 1.0, 1.0, True),
+                ExperimentSpec(
+                    "lingbot_world_points_habitat_pose_calibrated",
+                    "lingbot_world_points",
+                    "habitat",
+                    args.calibrated_lingbot_depth_scale,
+                    1.0,
+                    True,
+                ),
+            ]
+        )
     depth_scales = parse_float_list(args.depth_scales)
     pose_scales = parse_float_list(args.pose_scales)
     scale_specs = [
